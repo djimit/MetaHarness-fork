@@ -77,6 +77,28 @@ They are **not interchangeable**. A consumer wiring one into a pipeline expectin
 branch on `schema` (`typeof out.schema === 'string'` ⇒ harness badges; `=== 1` ⇒ metaharness
 scorecard) and refuse the wrong shape rather than silently defaulting missing fields to `0`.
 
+## Optional Cognitum Meta-Proxy sidecar
+
+Meta-Proxy is an optional local Rust sidecar, not an npm dependency and not part
+of normal harness scaffolding. Install it only when you want a locally bound,
+Claude-compatible routing endpoint with Meta-Proxy's own Cognitum OAuth flow:
+
+```bash
+npx metaharness proxy install --yes   # signed v0.3.0 download; checksum + Ed25519 verified
+npx metaharness proxy login           # browser or headless Cognitum OAuth, owned by Meta-Proxy
+npx metaharness proxy start
+npx metaharness proxy status
+```
+
+`proxy install` downloads the platform archive from the public
+[`meta-proxy-dist`](https://github.com/cognitum-one/meta-proxy-dist) release
+channel only after explicit `--yes` consent. The CLI verifies the signed
+`SHA256SUMS` manifest against a public key pinned in MetaHarness before it
+extracts or replaces a binary. The sidecar is installed under
+`~/.metaharness/meta-proxy/`; credentials remain in Meta-Proxy's own storage.
+
+Other commands: `proxy stop`, `proxy path`, and `proxy logout`.
+
 ## Eject from ruflo
 
 If you've been using ruflo and want your own focused harness from it:

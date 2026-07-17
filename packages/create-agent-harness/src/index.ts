@@ -629,6 +629,14 @@ async function runMetaHarnessSubcommand(sub: string, rest: string[]): Promise<nu
       for (const line of r.lines) console.log(line);
       return r.code;
     }
+    case 'proxy': {
+      // Optional Meta-Proxy integration. The signed Rust sidecar is downloaded
+      // only through its explicit `install --yes` command, never while scaffolding.
+      const { metaProxyCmd } = await import('./meta-proxy.js');
+      const r = await metaProxyCmd(rest);
+      for (const line of r.lines) console.log(line);
+      return r.code;
+    }
     default:
       return null; // not a known subcommand
   }
@@ -710,6 +718,7 @@ export async function main(argv: string[]): Promise<number> {
     console.log('       npx metaharness analyze <repo>           (recommend a harness plan, no-exec)');
     console.log('       npx metaharness genome <repo>            (7-section repo readiness)');
     console.log('       npx metaharness learn --host <h> --model <m> --slice <manifest>   (ADR-235 GEPA learning run — $0 dry-run by default, --run to spend; needs a repo checkout)');
+    console.log('       npx metaharness proxy <install|status|start|stop|path|login|logout>  (optional signed Cognitum Meta-Proxy sidecar)');
     console.log('       npx metaharness --from-existing [./path]');
     console.log('       npx metaharness --wizard          (iter 100 — interactive picker)');
     console.log('       npx metaharness --list            (browse all templates)');
