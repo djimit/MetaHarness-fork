@@ -84,11 +84,38 @@ of normal harness scaffolding. Install it only when you want a locally bound,
 Claude-compatible routing endpoint with Meta-Proxy's own Cognitum OAuth flow:
 
 ```bash
-npx metaharness proxy install --yes   # signed v0.3.0 download; checksum + Ed25519 verified
-npx metaharness proxy login           # browser or headless Cognitum OAuth, owned by Meta-Proxy
-npx metaharness proxy start
-npx metaharness proxy status
+npx metaharness proxy install --yes   # signed v0.4.0 download; checksum + Ed25519 verified
+npx metaharness proxy run -- claude   # starts the sidecar and routes this Claude session through it
+npx metaharness proxy run --policy critical -- claude -p "review this migration"
 ```
+
+`proxy run` is the activation path: it supplies `ANTHROPIC_BASE_URL` and the
+local proxy bearer token only to the child process. It does not modify global
+Claude settings, project files, or persisted client configuration. With the
+Meta-Proxy automatic-failover release installed, ordinary requests use the
+user's Claude Passthrough identity; trusted rate-limit telemetry can then
+select consented Cloud or Sponsored capacity per request. Cognitum login is
+needed only for Cloud routing, not for installation or normal Passthrough.
+
+Use `npx metaharness proxy login` to authorize Cognitum Cloud routing, and
+`npx metaharness proxy status` to inspect the managed sidecar.
+
+### Per-worktree routing policy
+
+`proxy run` attaches a short-lived, HMAC-signed local capability to the
+launched process. The policy is scoped to a one-way fingerprint of the current
+worktree; neither its path nor repository metadata leaves the machine.
+
+- `critical` — suppress automatic Power Saver and Sponsored failover for this
+  worktree. Explicit manual controls still apply.
+- `standard` — the normal automatic policy: Power Saver at 80% utilization,
+  Sponsored only after exhaustion and only with consent.
+- `economy` — Power Saver may start at 60% utilization; it retains all consent
+  gates and the Sponsored-at-exhaustion limit.
+
+The capability is verified by Meta-Proxy, not inferred from `.claude`, a Git
+branch name, or any repository-controlled file. Meta-Proxy v0.4.0 or later is
+required for per-worktree policies; older releases reject the scoped token.
 
 `proxy install` downloads the platform archive from the public
 [`meta-proxy-dist`](https://github.com/cognitum-one/meta-proxy-dist) release

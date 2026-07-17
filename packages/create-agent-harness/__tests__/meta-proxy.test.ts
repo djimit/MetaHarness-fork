@@ -3,14 +3,21 @@ import { describe, expect, it } from 'vitest';
 
 import {
   META_PROXY_VERSION,
+  createMetaProxyPolicyToken,
   isValidReleaseVersion,
+  metaProxyClientEnvironment,
   metaProxyCmd,
+  metaProxyEndpoint,
   parseSha256Sums,
   resolveMetaProxyAsset,
   sha256Hex,
   verifyMetaProxyChecksum,
   verifyMetaProxyManifest,
+  worktreeFingerprint,
 } from '../src/meta-proxy.js';
+import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 
 describe('optional Meta-Proxy integration', () => {
   it('maps each supported platform to the signed v0.3.0 asset name', () => {
@@ -50,6 +57,42 @@ describe('optional Meta-Proxy integration', () => {
 
     const help = await metaProxyCmd(['help']);
     expect(help.code).toBe(0);
-    expect(help.lines.join('\n')).toMatch(/install.*status.*start.*stop.*login.*logout/i);
+    expect(help.lines.join('\n')).toMatch(/install.*status.*start.*stop.*login.*logout.*run/i);
+  });
+
+  it('passes the local proxy token only to a literal loopback endpoint', () => {
+    const home = mkdtempSync(join(tmpdir(), 'metaharness-proxy-env-'));
+    const priorState = process.env.RUFLO_STATE_DIR;
+    try {
+      const state = join(home, '.ruflo');
+      mkdirSync(state, { recursive: true });
+      process.env.RUFLO_STATE_DIR = state;
+      writeFileSync(join(state, 'proxy-token'), 'local-token\n');
+      writeFileSync(join(state, 'proxy-config.toml'), 'bind = "127.0.0.1:22435"\n');
+
+      expect(metaProxyEndpoint(home)).toBe('http://127.0.0.1:22435');
+      expect(metaProxyClientEnvironment(home)).toEqual({
+        ANTHROPIC_BASE_URL: 'http://127.0.0.1:22435',
+        ANTHROPIC_AUTH_TOKEN: 'local-token',
+      });
+
+      writeFileSync(join(state, 'proxy-config.toml'), 'bind = "0.0.0.0:11435"\n');
+      expect(() => metaProxyEndpoint(home)).toThrow(/non-loopback/i);
+    } finally {
+      if (priorState === undefined) delete process.env.RUFLO_STATE_DIR;
+      else process.env.RUFLO_STATE_DIR = priorState;
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+
+  it('mints a scoped, signed worktree policy capability without exposing a path', () => {
+    const token = createMetaProxyPolicyToken('local-proxy-secret', 'economy', worktreeFingerprint('C:/tmp/herd/agent-a'), 0);
+    const [prefix, encoded, signature] = token.split('.');
+    expect(prefix).toBe('mh1');
+    expect(signature).toMatch(/^[A-Za-z0-9_-]+$/);
+    const claim = JSON.parse(Buffer.from(encoded!, 'base64url').toString('utf8'));
+    expect(claim).toMatchObject({ policy: 'economy', exp: 28_800 });
+    expect(claim.worktree).toMatch(/^[a-f0-9]{32}$/);
+    expect(JSON.stringify(claim)).not.toContain('C:/tmp/herd/agent-a');
   });
 });

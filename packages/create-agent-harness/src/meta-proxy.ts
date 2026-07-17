@@ -8,7 +8,7 @@
  * under the user's MetaHarness state directory.
  */
 import { spawn, spawnSync } from 'node:child_process';
-import { createHash, createPublicKey, verify as verifySignature } from 'node:crypto';
+import { createHash, createHmac, createPublicKey, verify as verifySignature } from 'node:crypto';
 import {
   chmodSync,
   closeSync,
@@ -26,7 +26,7 @@ import {
 import { homedir } from 'node:os';
 import { basename, join } from 'node:path';
 
-export const META_PROXY_VERSION = '0.3.0';
+export const META_PROXY_VERSION = '0.4.0';
 export const META_PROXY_RELEASE_BASE = 'https://github.com/cognitum-one/meta-proxy-dist/releases/download';
 
 /** The release signing key, pinned in the client rather than fetched from GitHub. */
@@ -106,6 +106,76 @@ export function metaProxyBinaryPath(
   home = homedir(),
 ): string {
   return join(metaProxyDataDir(home), 'bin', platform === 'win32' ? 'meta-proxy.exe' : 'meta-proxy');
+}
+
+/** Meta-Proxy owns this state directory; MetaHarness reads only the local bearer token. */
+export function rufloStateDir(home = homedir()): string {
+  return process.env.RUFLO_STATE_DIR?.trim() || join(home, '.ruflo');
+}
+
+export function metaProxyTokenPath(home = homedir()): string {
+  return join(rufloStateDir(home), 'proxy-token');
+}
+
+/**
+ * Resolve the endpoint that receives the local bearer token. We intentionally
+ * support only literal loopback bindings: a user-controlled config must never
+ * make `proxy run` disclose a local proxy token to a remote host.
+ */
+export function metaProxyEndpoint(home = homedir()): string {
+  let bind = '127.0.0.1:11435';
+  try {
+    const raw = readFileSync(join(rufloStateDir(home), 'proxy-config.toml'), 'utf8');
+    const match = raw.match(/^bind\s*=\s*"([^"]+)"\s*$/m);
+    if (match?.[1]) bind = match[1];
+  } catch { /* Meta-Proxy uses the documented default when the config is absent. */ }
+
+  const match = bind.match(/^(127\.0\.0\.1|\[::1\]):([1-9]\d{0,4})$/);
+  const port = match ? Number.parseInt(match[2]!, 10) : 0;
+  if (!match || port > 65_535) {
+    throw new Error(`Refusing to route a client through non-loopback Meta-Proxy bind "${bind}".`);
+  }
+  return `http://${bind}`;
+}
+
+/** Environment passed only to the launched client; no token is persisted in a project file. */
+export function metaProxyClientEnvironment(home = homedir()): Record<string, string> {
+  let token = '';
+  try { token = readFileSync(metaProxyTokenPath(home), 'utf8').trim(); } catch { /* reported below */ }
+  if (!token) {
+    throw new Error('Meta-Proxy token is unavailable. Start Meta-Proxy once to create its local token.');
+  }
+  return {
+    ANTHROPIC_BASE_URL: metaProxyEndpoint(home),
+    ANTHROPIC_AUTH_TOKEN: token,
+  };
+}
+
+export type WorktreePolicy = 'critical' | 'standard' | 'economy';
+
+const WORKTREE_POLICIES: ReadonlySet<string> = new Set(['critical', 'standard', 'economy']);
+
+/** A stable correlation value, never a filesystem path, prompt, or repo name. */
+export function worktreeFingerprint(cwd = process.cwd()): string {
+  return createHash('sha256').update(cwd).digest('hex').slice(0, 32);
+}
+
+/**
+ * Mint a short-lived policy capability accepted by Meta-Proxy v0.4.0+.
+ * The underlying proxy secret remains the HMAC key and is never sent upstream.
+ */
+export function createMetaProxyPolicyToken(
+  proxyToken: string,
+  policy: WorktreePolicy,
+  worktree = worktreeFingerprint(),
+  now = Date.now(),
+): string {
+  if (!WORKTREE_POLICIES.has(policy)) throw new Error(`Unknown worktree policy "${policy}".`);
+  const payload = Buffer.from(JSON.stringify({ policy, worktree, exp: Math.floor(now / 1_000) + 8 * 60 * 60 }))
+    .toString('base64url');
+  const signed = `mh1.${payload}`;
+  const signature = createHmac('sha256', proxyToken).update(signed).digest('base64url');
+  return `${signed}.${signature}`;
 }
 
 function pidPath(home = homedir()): string {
@@ -321,6 +391,75 @@ export function stopMetaProxy(home = homedir()): MetaProxyInstallResult {
   }
 }
 
+async function waitForMetaProxy(endpoint: string, token: string, timeoutMs = 5_000): Promise<boolean> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    try {
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), 1_000);
+      const response = await fetch(`${endpoint}/status`, {
+        headers: { authorization: `Bearer ${token}` },
+        signal: controller.signal,
+      });
+      clearTimeout(timer);
+      if (response.ok) return true;
+    } catch { /* a detached proxy can take a moment to bind its loopback port */ }
+    await new Promise<void>(resolve => setTimeout(resolve, 50));
+  }
+  return false;
+}
+
+/**
+ * Start the sidecar if necessary, wait until its authenticated health endpoint
+ * is ready, then launch an Anthropic-compatible client through it. This is the
+ * activation point for automatic Passthrough -> Cloud/Sponsored failover.
+ */
+function parseRunArgs(args: string[]): { policy: WorktreePolicy; commandArgs: string[] } | string {
+  let policy: WorktreePolicy = 'standard';
+  const remaining = [...args];
+  while (remaining[0] === '--policy') {
+    const value = remaining[1];
+    if (!value || !WORKTREE_POLICIES.has(value)) {
+      return '--policy must be one of: critical, standard, economy.';
+    }
+    policy = value as WorktreePolicy;
+    remaining.splice(0, 2);
+  }
+  return { policy, commandArgs: remaining[0] === '--' ? remaining.slice(1) : remaining };
+}
+
+export async function runThroughMetaProxy(args: string[], home = homedir()): Promise<ProxyCommandResult> {
+  const parsed = parseRunArgs(args);
+  if (typeof parsed === 'string') return { code: 2, lines: [parsed] };
+  const started = startMetaProxy(home);
+  if (!started.ok) return { code: 1, lines: [started.message] };
+
+  let clientEnv: Record<string, string>;
+  try {
+    clientEnv = metaProxyClientEnvironment(home);
+  } catch (error) {
+    return { code: 1, lines: [error instanceof Error ? error.message : String(error)] };
+  }
+  if (!await waitForMetaProxy(clientEnv.ANTHROPIC_BASE_URL!, clientEnv.ANTHROPIC_AUTH_TOKEN!)) {
+    return { code: 1, lines: ['Meta-Proxy did not become ready within 5 seconds. Run `metaharness proxy status` and inspect its log.'] };
+  }
+
+  const command = parsed.commandArgs[0] || 'claude';
+  const result = spawnSync(command, parsed.commandArgs.slice(1), {
+    stdio: 'inherit',
+    env: {
+      ...process.env,
+      ...clientEnv,
+      ANTHROPIC_AUTH_TOKEN: createMetaProxyPolicyToken(
+        clientEnv.ANTHROPIC_AUTH_TOKEN!, parsed.policy,
+      ),
+    },
+    windowsHide: true,
+  });
+  if (result.error) return { code: 1, lines: [`Could not start ${command}: ${result.error.message}`] };
+  return { code: result.status ?? 1, lines: [] };
+}
+
 export interface ProxyCommandResult { code: number; lines: string[]; }
 
 /** `metaharness proxy` command surface. OAuth remains inside the Meta-Proxy binary. */
@@ -330,20 +469,22 @@ export async function metaProxyCmd(args: string[]): Promise<ProxyCommandResult> 
     return {
       code: 0,
       lines: [
-        'Usage: metaharness proxy <install|status|start|stop|path|login|logout> [options]',
+        'Usage: metaharness proxy <install|status|start|stop|path|login|logout|run> [options]',
         '',
         'Optional signed Meta-Proxy sidecar for local Claude-compatible routing.',
         `  install [--version ${META_PROXY_VERSION}] --yes  download, verify, and install`,
         '  status                                      show installed version and managed process state',
         '  start | stop | path                         manage the optional local sidecar',
         '  login | logout                              run Meta-Proxy Cognitum OAuth login/logout',
+        '  run [--policy <critical|standard|economy>] [--] <client> [args...]',
+        '                                               launch Claude-compatible client through Meta-Proxy',
       ],
     };
   }
   if (subcommand === 'install') {
     const versionIndex = args.indexOf('--version');
     const version = versionIndex >= 0 ? args[versionIndex + 1] : undefined;
-    if (versionIndex >= 0 && !version) return { code: 2, lines: ['--version requires a value, for example 0.3.0.'] };
+    if (versionIndex >= 0 && !version) return { code: 2, lines: ['--version requires a value, for example 0.4.0.'] };
     if (!args.includes('--yes')) {
       return { code: 2, lines: ['Refusing to download a binary without explicit consent. Re-run: metaharness proxy install --yes'] };
     }
@@ -375,6 +516,9 @@ export async function metaProxyCmd(args: string[]): Promise<ProxyCommandResult> 
     const result = stopMetaProxy();
     return { code: result.ok ? 0 : 1, lines: [result.message] };
   }
+  if (subcommand === 'run') {
+    return runThroughMetaProxy(args.slice(1));
+  }
   if (subcommand === 'login' || subcommand === 'logout') {
     const status = metaProxyStatus();
     if (!status.installed) return { code: 1, lines: ['Meta-Proxy is not installed. Run `metaharness proxy install --yes` first.'] };
@@ -382,5 +526,5 @@ export async function metaProxyCmd(args: string[]): Promise<ProxyCommandResult> 
     if (result.error) return { code: 1, lines: [`Could not run Meta-Proxy ${subcommand}: ${result.error.message}`] };
     return { code: result.status ?? 1, lines: [] };
   }
-  return { code: 2, lines: [`Unknown proxy subcommand "${subcommand}". Try: install | status | start | stop | path | login | logout`] };
+  return { code: 2, lines: [`Unknown proxy subcommand "${subcommand}". Try: install | status | start | stop | path | login | logout | run`] };
 }
