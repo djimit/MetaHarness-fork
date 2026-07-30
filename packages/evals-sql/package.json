@@ -11,7 +11,10 @@
       "import": "./dist/index.js"
     }
   },
-  "files": ["dist", "README.md"],
+  "files": [
+    "dist",
+    "README.md"
+  ],
   "publishConfig": {
     "access": "public"
   },
@@ -20,13 +23,25 @@
     "test": "vitest run",
     "lint": "tsc --noEmit"
   },
-  "keywords": ["sql", "text-to-sql", "spider", "bird", "benchmark", "eval", "flywheel", "metaharness", "policy-evolution", "llm", "agent-harness"],
+  "keywords": [
+    "sql",
+    "text-to-sql",
+    "spider",
+    "bird",
+    "benchmark",
+    "eval",
+    "flywheel",
+    "metaharness",
+    "policy-evolution",
+    "llm",
+    "agent-harness"
+  ],
   "license": "MIT",
   "dependencies": {
     "@metaharness/flywheel": "^0.1.1"
   },
   "devDependencies": {
     "typescript": "^5.4.0",
-    "vitest": "^2.0.0"
+    "vitest": "^4.1.10"
   }
 }

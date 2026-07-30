@@ -60,11 +60,11 @@
   },
   "devDependencies": {
     "typescript": "^5.4.0",
-    "vitest": "^2.0.0"
+    "vitest": "^4.1.10"
   },
   "peerDependencies": {
-    "agenticow": "^0.2.0",
-    "agentic-jujutsu": "^2.3.6"
+    "agentic-jujutsu": "^2.3.6",
+    "agenticow": "^0.2.0"
   },
   "peerDependenciesMeta": {
     "agenticow": {
