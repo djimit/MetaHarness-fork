@@ -3,7 +3,7 @@ import { describe, it, expect } from 'vitest';
 import { mkdtemp } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { mkdtempSync, writeFileSync, readFileSync, existsSync } from 'node:fs';
+import { chmodSync, mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync } from 'node:fs';
 import { parseArgs } from '../src/index.js';
 import { wireWasm, markWasmDirCommonjs } from '../src/with-wasm.js';
 
@@ -19,6 +19,28 @@ describe('--with-wasm (GH #25)', () => {
     const r = wireWasm(dir, dir); // dir has no Cargo.toml
     expect(r.ok).toBe(false);
     expect(r.lines.join('\n')).toMatch(/no Cargo.toml/);
+  });
+
+  it('passes crate paths to wasm-pack without shell interpretation', () => {
+    const root = mkdtempSync(join(tmpdir(), 'ww-safe-'));
+    const crate = join(root, 'crate;touch PWNED');
+    const target = join(root, 'target');
+    const bin = join(root, 'bin');
+    mkdirSync(crate);
+    mkdirSync(target);
+    mkdirSync(bin);
+    writeFileSync(join(crate, 'Cargo.toml'), '[package]\nname="safe"\nversion="0.1.0"\n');
+    writeFileSync(join(target, 'package.json'), '{}');
+    writeFileSync(join(bin, 'wasm-pack'), '#!/bin/sh\n[ "$1" = "--version" ] && exit 0\nout="${7}"\nmkdir -p "$out"\nprintf "{\\"main\\":\\"index.js\\"}" > "$out/package.json"\n');
+    chmodSync(join(bin, 'wasm-pack'), 0o755);
+    const oldPath = process.env.PATH;
+    process.env.PATH = `${bin}:${oldPath}`;
+    try {
+      expect(wireWasm(crate, target).ok).toBe(true);
+      expect(existsSync(join(root, 'PWNED'))).toBe(false);
+    } finally {
+      process.env.PATH = oldPath;
+    }
   });
 });
 
