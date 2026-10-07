@@ -17,7 +17,7 @@
     "emulators": "docker compose -f docker-compose.emulators.yml up"
   },
   "dependencies": {
-    "express": "^4.21.0",
+    "express": "^4.22.3",
     "node-fetch": "^3.3.2"
   },
   "devDependencies": {
