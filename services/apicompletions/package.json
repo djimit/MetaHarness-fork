@@ -17,21 +17,23 @@
     "emulators": "docker compose -f docker-compose.emulators.yml up"
   },
   "dependencies": {
-    "express": "^4.21.0",
+    "express": "^4.22.3",
     "node-fetch": "^3.3.2"
   },
   "devDependencies": {
     "@types/express": "^4.17.21",
     "@types/node": "^20.11.0",
     "@types/supertest": "^6.0.2",
-    "@vitest/coverage-v8": "^4.1.10",
+    "@vitest/coverage-v8": "^4.1.11",
     "supertest": "^7.0.0",
     "tsx": "^4.7.0",
     "typescript": "^5.4.0",
-    "vitest": "^4.1.10"
+    "vitest": "^4.1.11"
   },
   "overrides": {
+    "nanoid": "^3.3.18",
     "proxy-addr": "^2.0.8",
+    "qs": "^6.16.0",
     "source-map-js": "^1.2.2"
   },
   "comments": {
