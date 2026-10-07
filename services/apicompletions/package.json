@@ -30,6 +30,9 @@
     "typescript": "^5.4.0",
     "vitest": "^4.1.10"
   },
+  "overrides": {
+    "proxy-addr": "^2.0.8"
+  },
   "comments": {
     "deferred-deps": "Wired during Phase-1 implementation (kept out of the skeleton to keep install fast + green): firebase-admin (Firestore api_keys/usage_ledger), @google-cloud/pubsub (completions-usage), js-tiktoken + per-family tokenizers (§5.1 progressive billing floor). @midstream/wasm is a FUTURE optionalDependency (404 on npm today — §3.5) loaded via the dynamic-import firewall in src/midstream/firewall.ts, never declared as a hard dep."
   }
