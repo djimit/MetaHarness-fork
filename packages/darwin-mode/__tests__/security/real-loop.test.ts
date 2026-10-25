@@ -49,7 +49,7 @@ describe('graceful skip (always runs)', () => {
   });
 });
 
-describe.skipIf(!available)('real semgrep as the in-loop judge', () => {
+describe.skipIf(!available)('real semgrep as the in-loop judge', { timeout: 60_000 }, () => {
   it('promotes a broader rule over a narrower incumbent (statistically, zero FP)', () => {
     const v = evaluateRealCandidate(
       ['eval'],

@@ -44,7 +44,7 @@ describe('semgrep availability probe (always runs, never throws)', () => {
   });
 });
 
-describe.skipIf(!available)('real semgrep on the labeled fixture', () => {
+describe.skipIf(!available)('real semgrep on the labeled fixture', { timeout: 60_000 }, () => {
   it('detects the real eval() vulnerability (true positive)', () => {
     const res = oracle.evaluate(rule, { dir: fixtureDir, labels });
     expect(res.available).toBe(true);

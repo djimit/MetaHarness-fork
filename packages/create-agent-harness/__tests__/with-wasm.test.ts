@@ -1,11 +1,17 @@
 // SPDX-License-Identifier: MIT
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
+import { execFileSync } from 'node:child_process';
 import { mkdtemp } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { chmodSync, mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync } from 'node:fs';
 import { parseArgs } from '../src/index.js';
 import { wireWasm, markWasmDirCommonjs } from '../src/with-wasm.js';
+
+vi.mock('node:child_process', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('node:child_process')>();
+  return { ...actual, execFileSync: vi.fn(actual.execFileSync) };
+});
 
 describe('--with-wasm (GH #25)', () => {
   it('parseArgs captures --with-wasm <path>', () => {
@@ -25,21 +31,29 @@ describe('--with-wasm (GH #25)', () => {
     const root = mkdtempSync(join(tmpdir(), 'ww-safe-'));
     const crate = join(root, 'crate;touch PWNED');
     const target = join(root, 'target');
-    const bin = join(root, 'bin');
     mkdirSync(crate);
     mkdirSync(target);
-    mkdirSync(bin);
     writeFileSync(join(crate, 'Cargo.toml'), '[package]\nname="safe"\nversion="0.1.0"\n');
     writeFileSync(join(target, 'package.json'), '{}');
-    writeFileSync(join(bin, 'wasm-pack'), '#!/bin/sh\n[ "$1" = "--version" ] && exit 0\nout="${7}"\nmkdir -p "$out"\nprintf "{\\"main\\":\\"index.js\\"}" > "$out/package.json"\n');
-    chmodSync(join(bin, 'wasm-pack'), 0o755);
-    const oldPath = process.env.PATH;
-    process.env.PATH = `${bin}:${oldPath}`;
+    // A POSIX launcher fixture cannot execute on Windows; assert the shell-free boundary directly.
+    const execute = vi.mocked(execFileSync);
+    execute.mockClear();
+    execute.mockReturnValueOnce(Buffer.alloc(0));
+    execute.mockImplementationOnce(() => {
+      writeFileSync(join(target, 'wasm', 'package.json'), '{"main":"index.js"}');
+      return Buffer.alloc(0);
+    });
     try {
       expect(wireWasm(crate, target).ok).toBe(true);
+      expect(execute).toHaveBeenCalledTimes(2);
+      expect(execute).toHaveBeenNthCalledWith(1, 'wasm-pack', ['--version'], { stdio: 'ignore' });
+      expect(execute).toHaveBeenNthCalledWith(
+        2, 'wasm-pack', ['build', crate, '--target', 'nodejs', '--release', '--out-dir', join(target, 'wasm')],
+        { stdio: 'inherit', env: expect.objectContaining({ RUSTFLAGS: '' }) },
+      );
       expect(existsSync(join(root, 'PWNED'))).toBe(false);
     } finally {
-      process.env.PATH = oldPath;
+      execute.mockReset();
     }
   });
 });
